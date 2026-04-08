@@ -111,7 +111,8 @@ namespace vx::mcp {
         }
 
         transport_ = transport; // Store the transport pointer
-        isStopping_ = false; // Reset stopping flag
+        isStopping_ = false;
+        isSyncCleaned_ = false;
 
         // Start the writer thread
         writer_running_ = true;
@@ -165,6 +166,7 @@ namespace vx::mcp {
 
         transport_ = transport;
         isStopping_ = false;
+        isAsyncCleaned_ = false;
 
         // Start the writer thread
         writer_running_ = true;
@@ -216,9 +218,10 @@ namespace vx::mcp {
     }
 
     void Server::Stop() {
+        if (isSyncCleaned_.exchange(true)) return; // 确保清理逻辑只执行一次
         LOG(INFO) << "Stopping server..." << std::endl;
 
-        isStopping_ = true;
+        isStopping_ = true; // 同时确保循环退出
 
         // Stop transport (SSE shuts server down; stdio can no-op)
         if (transport_) {
@@ -501,7 +504,7 @@ namespace vx::mcp {
     }
 
     void Server::StopAsync() {
-        if (isStopping_) return;
+        if (isAsyncCleaned_.exchange(true)) return;
 
         isStopping_ = true;
         LOG(INFO) << "Stopping async server..." << std::endl;

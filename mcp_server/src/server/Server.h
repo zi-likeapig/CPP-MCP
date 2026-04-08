@@ -99,7 +99,9 @@ namespace vx::mcp {
     private:
         std::unordered_map<std::string, std::function<json(const json&)>> functionMap;
 
-        bool isStopping_ = false;
+        std::atomic<bool> isStopping_{false};
+        std::atomic<bool> isSyncCleaned_{false};
+        std::atomic<bool> isAsyncCleaned_{false};
         int verboseLevel_ = 0;
         int parserErrors_ = 0;
         std::string name_ = "mcp-server";
