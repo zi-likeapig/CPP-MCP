@@ -38,42 +38,129 @@ typedef HMODULE LibraryHandle;
 #include <iostream>
 #include <filesystem>
 #include <algorithm>
+#include <thread>
+#include <atomic>
+#include <shared_mutex>
+#include <functional>
+#include <chrono>
+#include <set>
+#include <map>
 
 #include "aixlog.hpp"
 #include "PluginAPI.h"
 
 namespace vx::mcp {
 
+    // 插件实例的完整生命周期由此结构体管理。
+    // 当最后一个 shared_ptr 引用释放时，析构函数自动执行
+    // Shutdown → delete notifications → DestroyPlugin → dlclose → 清理 staging 文件
+    // 的完整清理流程。只要还有请求持有快照引用，插件就不会被卸载。
     struct PluginEntry {
+        // 插件原始路径（用于对比目录变化）
         std::string path;
-        LibraryHandle handle;
-        PluginAPI* instance;
+        // 实际加载的 staging 副本路径（dlopen 使用此路径，确保每次加载独立模块）
+        std::string stagingPath;
+        LibraryHandle handle = nullptr;
+        PluginAPI* instance = nullptr;
 
-        // Function pointers
-        PluginAPI* (*createFunc)();
-        void (*destroyFunc)(PluginAPI*);
+        std::filesystem::file_time_type lastModified;
+        std::uintmax_t fileSize = 0;
+
+        PluginAPI* (*createFunc)() = nullptr;
+        void (*destroyFunc)(PluginAPI*) = nullptr;
+
+        PluginEntry() = default;
+        PluginEntry(const PluginEntry&) = delete;
+        PluginEntry& operator=(const PluginEntry&) = delete;
+
+        ~PluginEntry() {
+            if (instance) {
+                instance->Shutdown();
+                delete instance->notifications;
+                instance->notifications = nullptr;
+                destroyFunc(instance);
+                instance = nullptr;
+            }
+            if (handle) {
+#ifdef _WIN32
+                FreeLibrary(handle);
+#else
+                dlclose(handle);
+#endif
+                handle = nullptr;
+            }
+            // 清理 staging 副本
+            if (!stagingPath.empty() && stagingPath != path) {
+                std::error_code ec;
+                std::filesystem::remove(stagingPath, ec);
+            }
+        }
     };
 
     class PluginsLoader {
     public:
+        using OnPluginLoaded = std::function<void(PluginEntry&)>;
+
+        // 插件变更通知回调，参数标识哪些类型发生了变化
+        using OnPluginsChanged = std::function<void(bool toolsChanged, bool promptsChanged, bool resourcesChanged)>;
+
         PluginsLoader();
         ~PluginsLoader();
 
-        // Load plugins from a directory
         bool LoadPlugins(const std::string& directory);
-
-        // Unload all plugins
         void UnloadPlugins();
 
-        // Get loaded plugins
-        const std::vector<PluginEntry>& GetPlugins() const;
+        std::vector<std::shared_ptr<PluginEntry>> GetPluginsSnapshot() const;
+
+        void SetOnPluginLoaded(OnPluginLoaded callback);
+        void SetOnPluginsChanged(OnPluginsChanged callback);
+
+        void StartWatching(const std::string& directory, std::chrono::seconds interval = std::chrono::seconds(5));
+        void StopWatching();
 
     private:
-        bool LoadPlugin(const std::string& path);
-        void UnloadPlugin(PluginEntry& entry);
+        // CreatePluginInstance 的失败原因
+        enum class LoadResult {
+            kSuccess,              // 加载成功
+            kLoadFailed,           // 插件本身加载/初始化失败，应记入失败缓存
+            kSourceChangedDuringCopy  // 复制期间源文件被覆盖，不记入失败缓存，下轮重试
+        };
+
+        // 将插件文件复制到 staging 目录并从副本路径加载，确保独立模块
+        std::shared_ptr<PluginEntry> CreatePluginInstance(const std::string& path, LoadResult& result);
+
+        // 创建 staging 副本，返回副本路径。失败返回空字符串
+        std::string CopyToStaging(const std::string& originalPath);
+
+        // 确保 staging 目录存在
+        void EnsureStagingDir(const std::string& pluginsDirectory);
+
+        bool IsPluginFile(const std::string& extension) const;
+
+        // 使用 std::filesystem::path 判断是否在 staging 目录下，跨平台兼容
+        bool IsStagingPath(const std::filesystem::path& filePath) const;
+
+        void WatchLoop(std::string directory, std::chrono::seconds interval);
+        void ScanForChanges(const std::string& directory);
 
     private:
-        std::vector<PluginEntry> m_plugins;
+        std::vector<std::shared_ptr<PluginEntry>> m_plugins;
+        mutable std::shared_mutex m_pluginsMutex;
+
+        std::thread m_watchThread;
+        std::atomic<bool> m_watching{false};
+
+        OnPluginLoaded m_onPluginLoaded;
+        OnPluginsChanged m_onPluginsChanged;
+
+        std::string m_stagingDir;
+
+        // 记录加载失败的插件的文件指纹（mtime+size），只有文件再次变化后才重试，避免持续重试坏插件
+        struct FileFingerprint {
+            std::filesystem::file_time_type mtime;
+            std::uintmax_t size;
+        };
+        std::map<std::string, FileFingerprint> m_failedPlugins;
     };
 
 }

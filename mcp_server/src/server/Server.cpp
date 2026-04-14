@@ -219,7 +219,6 @@ namespace vx::mcp {
 
     void Server::Stop() {
         if (isSyncCleaned_.exchange(true)) return; // 确保清理逻辑只执行一次
-        LOG(INFO) << "Stopping server..." << std::endl;
 
         isStopping_ = true; // 同时确保循环退出
 
@@ -229,7 +228,9 @@ namespace vx::mcp {
             transport_->Stop();
             transport_.reset();
             LOG(INFO) << "Transport stopped." << std::endl;
-        }
+         }
+
+        LOG(INFO) << "Stopping server..." << std::endl;
 
         // Signal and join writer thread
         writer_running_ = false;
@@ -238,19 +239,15 @@ namespace vx::mcp {
             writer_thread_.join();
             LOG(INFO) << "Writer thread joined." << std::endl;
         }
-
-        // Join reader thread if async
-        reader_running_ = false;
-        if (reader_thread_.joinable()) {
-            reader_thread_.join();
-            LOG(INFO) << "Reader thread joined." << std::endl;
-        }
-
         LOG(INFO) << "Server stopped." << std::endl;
     }
 
+    void Server::RequestStop() {
+        isStopping_.store(true);
+    }
+
     void Server::SendNotification(const std::string& pluginName, const char* notification) {
-        if (isStopping_) {
+        if (isStopping_.load()) {
             LOG(WARNING) << pluginName << " attempted to send notification while server stopping." << std::endl;
             return;
         }
@@ -377,11 +374,10 @@ namespace vx::mcp {
         response["jsonrpc"] = "2.0";
         response["id"] = request["id"];
         response["result"]["protocolVersion"] = request["params"]["protocolVersion"];
-        /// TODO: the "listChanged" parameter actually broke the Claude Desktop
-        /// should we check the the protocol version ???
-        response["result"]["capabilities"]["tools"] = json::object();
-        response["result"]["capabilities"]["prompts"] = json::object();
+        response["result"]["capabilities"]["tools"] = json::object({{"listChanged", true}});
+        response["result"]["capabilities"]["prompts"] = json::object({{"listChanged", true}});
         response["result"]["capabilities"]["resources"]["subscribe"] = true;
+        response["result"]["capabilities"]["resources"]["listChanged"] = true;
         response["result"]["capabilities"]["logging"] = json::object();
         response["result"]["serverInfo"]["name"] = name_;
         response["result"]["serverInfo"]["version"] = PROJECT_VERSION;
@@ -507,6 +503,7 @@ namespace vx::mcp {
         if (isAsyncCleaned_.exchange(true)) return;
 
         isStopping_ = true;
+
         LOG(INFO) << "Stopping async server..." << std::endl;
 
         // Stop writer thread

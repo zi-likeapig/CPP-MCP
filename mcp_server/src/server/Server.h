@@ -61,6 +61,10 @@ namespace vx::mcp {
         void Stop();
         void StopAsync();
 
+        // 信号安全的停止请求：仅设置原子标志，不做任何线程操作。
+        // 可在信号处理函数中安全调用，Connect 循环检测到标志后自行退出。
+        void RequestStop();
+
         inline bool IsValid() { return transport_ != nullptr; }
         inline void VerboseLevel(int level) { verboseLevel_ = level; }
         inline void Name(const std::string& name) { name_ = name; }

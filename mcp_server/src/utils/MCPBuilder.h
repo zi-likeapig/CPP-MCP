@@ -107,6 +107,28 @@ public:
         });
     }
 
+    // MCP 规范定义的能力列表变更通知，插件热加载后发送给客户端触发重新拉取
+    static json NotificationToolsListChanged() {
+        return json::object({
+            {"jsonrpc", "2.0"},
+            {"method", "notifications/tools/list_changed"}
+        });
+    }
+
+    static json NotificationPromptsListChanged() {
+        return json::object({
+            {"jsonrpc", "2.0"},
+            {"method", "notifications/prompts/list_changed"}
+        });
+    }
+
+    static json NotificationResourcesListChanged() {
+        return json::object({
+            {"jsonrpc", "2.0"},
+            {"method", "notifications/resources/list_changed"}
+        });
+    }
+
 };
 
 #endif //MCP_SERVER_MCPBUILDER_H
