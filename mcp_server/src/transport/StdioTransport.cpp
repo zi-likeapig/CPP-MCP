@@ -28,30 +28,40 @@
 
 namespace vx::transport {
 
+    // 修改过的更鲁棒的Read函数，处理了EOF和空行的情况
     std::pair<size_t, std::string> Stdio::Read() {
-        std::string line;
-        std::string json_data;
-
-        // Read headers until an empty line
         while (true) {
+            std::string json_data;
             int c;
+
             while ((c = std::getc(stdin)) != EOF && c != '\n') {
                 json_data += static_cast<char>(c);
             }
-            break;
-        }
 
-        return {json_data.length(), json_data};
+            // 如果遇到了EOF说明可能客户端已经断开连接了
+            if (c == EOF) {
+                // 如果还有数据，则返回数据
+                if (!json_data.empty()) {
+                    return {json_data.length(), json_data};
+                }
+                // 如果没数据，则返回空字符串和0，表示客户端已经断开连接
+                return {0, ""};
+            }
+
+            // 如果读到了空的\n，则跳过继续等待下一个数据
+            // 防止因为返回空导致服务器退出
+            if (json_data.empty()) {
+                continue;
+            }
+
+            // 如果没遇到EOF且读到了数据，则正常返回数据
+            return {json_data.length(), json_data};
+        }
     }
 
     std::future<std::pair<size_t, std::string>> Stdio::ReadAsync() {
-        return std::async(std::launch::async, []() {
-            std::string json_data;
-            int c;
-            while ((c = std::getc(stdin)) != EOF && c != '\n') {
-                json_data += static_cast<char>(c);
-            }
-            return std::make_pair(json_data.length(), json_data);
+        return std::async(std::launch::async, [this]() {
+            return Read();
         });
     }
 

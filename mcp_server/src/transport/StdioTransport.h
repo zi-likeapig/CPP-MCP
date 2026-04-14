@@ -43,6 +43,7 @@ namespace vx::transport {
         std::string GetVersion() override { return "0.2"; }
         int GetPort() override { return 0; }
 
+        // 因为是stdio模型，不需要真的启动一个网络服务器，所以这三个函数简略实现
         bool Start() override { return true; }
         void Stop() override {}
         bool IsRunning() override { return true; }

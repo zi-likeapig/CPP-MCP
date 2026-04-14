@@ -25,9 +25,6 @@
 #ifndef MCP_SERVER_TSINGLETON_H
 #define MCP_SERVER_TSINGLETON_H
 
-#include <memory>
-#include <mutex>
-
 template <typename T>
 class TSingleton
 {
@@ -38,28 +35,14 @@ public:
     TSingleton& operator=(const TSingleton&) = delete;
     TSingleton& operator=(TSingleton&&) = delete;
 
-    static T& GetInstance()
-    {
-        std::call_once(initFlag, []() {
-            instance.reset(new T());
-        });
-        return *instance;
+    static T& GetInstance() {
+        static T instance;
+        return instance;
     }
 
 protected:
     TSingleton() = default;
-    virtual ~TSingleton() = default;
-
-private:
-    static std::unique_ptr<T> instance;
-    static std::once_flag initFlag;
+    ~TSingleton() = default;
 };
-
-// Static member definitions
-template <typename T>
-std::unique_ptr<T> TSingleton<T>::instance = nullptr;
-
-template <typename T>
-std::once_flag TSingleton<T>::initFlag;
 
 #endif //MCP_SERVER_TSINGLETON_H

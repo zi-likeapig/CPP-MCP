@@ -33,11 +33,10 @@
 namespace vx::utils {
 
     struct SessionBuilder {
-
+        // 生成唯一会话ID，用于标识一个SSE会话
         static std::string GenerateUniqueSessionID() {
             auto now = std::chrono::high_resolution_clock::now();
-            auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                now.time_since_epoch()).count();
+            auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
 
             static std::random_device rd;
             static std::mt19937 gen(rd());
@@ -45,6 +44,9 @@ namespace vx::utils {
 
             std::stringstream ss;
             ss << std::hex << timestamp << "-" << dis(gen);
+            // 使用字符串流将时间戳和随机数拼接成一个字符串，并返回
+            // 类似于17f9ab23c1d4-8a72f1b3
+
             return ss.str();
         }
     };

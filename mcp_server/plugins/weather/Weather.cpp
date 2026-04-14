@@ -28,6 +28,12 @@
 
 using json = nlohmann::json;
 
+// PluginTool结构定义在PluginAPI.h中，有name, description, inputSchema三个成员变量
+// $schema是JSON schema的URL，标志使用的是哪一版本的JSON schema标准
+// type是JSON schema的类型，表示这是一个对象，不是数组或字符串
+// properties是JSON schema的属性，表示这个对象有哪些属性（字段）
+// required是JSON schema的必填属性，表示这个对象有哪些属性是必填的
+// additionalProperties是JSON schema的额外属性，表示这个对象有哪些属性是可选的
 static PluginTool methods[] = {
         {
             "get_weather",
@@ -48,7 +54,7 @@ static PluginTool methods[] = {
 
 const char* GetNameImpl() { return "weather-tools"; }
 const char* GetVersionImpl() { return "1.0.0"; }
-PluginType GetTypeImpl() { return PLUGIN_TYPE_TOOLS; }
+PluginType GetTypeImpl() { return PLUGIN_TYPE_TOOLS; }  // 定义在PluginAPI.h中的枚举值，PLUGIN_TYPE_TOOLS=0表示是工具类型
 
 int InitializeImpl() {
     return 1;
@@ -63,14 +69,14 @@ char* HandleRequestImpl(const char* req) {
 
     nlohmann::json weatherContent;
 
+    // 创建一个HTTP客户端，用于请求天气API
     httplib::Client cli("api.open-meteo.com");
     auto res = cli.Get("/v1/forecast?latitude=" + latitude + "&longitude=" + longitude + "&hourly=temperature_2m&forecast_days=1");
+    
+    // 如果请求成功，则解析响应
     if (res && res->status == 200) {
         // Parse the response from the weather API
         auto weatherData = json::parse(res->body);
-
-        // Extract city name from the request
-        auto city = request["params"]["arguments"]["city"].get<std::string>();
 
         // Create a human-readable message
         std::stringstream weatherMessage;
@@ -83,7 +89,7 @@ char* HandleRequestImpl(const char* req) {
         // Format the forecast in a human-friendly way
         weatherMessage << "Today's Temperature Forecast:\n";
 
-        // Morning (6 AM - 12 PM)
+        // Morning (6 AM - 12 PM) 取平均温度
         weatherMessage << "🌅 Morning: ";
         double morningTemp = 0.0;
         int morningCount = 0;
@@ -160,7 +166,9 @@ char* HandleRequestImpl(const char* req) {
 
         weatherContent["type"] = "text";
         weatherContent["text"] = weatherMessage.str();
-    } else {
+    } 
+    else {
+        // 如果请求失败，则返回错误信息
         weatherContent["type"] = "text";
         weatherContent["text"] = "Cannot get weather forecast for " + city + ".";
     }
@@ -172,6 +180,8 @@ char* HandleRequestImpl(const char* req) {
     response["isError"] = false;
 
     std::string result = response.dump();
+
+    // 因为插件接口返回的是char*，所以需要将json转换为char*
     char* buffer = new char[result.length() + 1];
 #ifdef _WIN32
     strcpy_s(buffer, result.length() + 1, result.c_str());
@@ -183,6 +193,7 @@ char* HandleRequestImpl(const char* req) {
 }
 
 void ShutdownImpl() {
+
 }
 
 int GetToolCountImpl() {
@@ -194,6 +205,9 @@ const PluginTool* GetToolImpl(int index) {
     return &methods[index];
 }
 
+// 是按照顺序而不是名字来匹配的，所以需要按照顺序来定义
+// PluginAPI结构里都没有Impl后缀（类似于只是抽象类，没有具体实现），这里对应成了有Impl后缀的函数
+// 所以名字是无法皮匹配上的，必须得按照顺序
 static PluginAPI plugin = {
         GetNameImpl,
         GetVersionImpl,
@@ -203,6 +217,8 @@ static PluginAPI plugin = {
         ShutdownImpl,
         GetToolCountImpl,
         GetToolImpl,
+
+        // 下面这四个nullptr对应着PluginAPI结构中四个关于resource和prompt的函数，这里没有实现，所以传入nullptr占位
         nullptr,
         nullptr,
         nullptr,

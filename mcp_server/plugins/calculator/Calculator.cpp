@@ -148,24 +148,84 @@ static long long factorial(int n) {
     return result;
 }
 
-// 工具定义
 static PluginTool methods[] = {
-    {"calculator", "Evaluates a mathematical expression", 
-     "{\"type\":\"object\",\"properties\":{\"expression\":{\"type\":\"string\",\"description\":\"Math expression\"}},\"required\":[\"expression\"]}"},
+    {"calculator", 
+     "Evaluates a mathematical expression", 
+     R"({
+        "type": "object",
+        "properties": {
+            "expression": { "type": "string", "description": "Math expression" }
+        },
+        "required": ["expression"]
+    })"},
+
     {"add", "Adds two numbers", 
-     "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+    })"},
+    
     {"subtract", "Subtracts b from a", 
-     "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+    })"},
+
     {"multiply", "Multiplies two numbers", 
-     "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+    })"},
+
     {"divide", "Divides a by b", 
-     "{\"type\":\"object\",\"properties\":{\"a\":{\"type\":\"number\"},\"b\":{\"type\":\"number\"}},\"required\":[\"a\",\"b\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "a": { "type": "number" },
+            "b": { "type": "number" }
+        },
+        "required": ["a", "b"]
+    })"},
+
     {"power", "Raises base to exponent", 
-     "{\"type\":\"object\",\"properties\":{\"base\":{\"type\":\"number\"},\"exponent\":{\"type\":\"number\"}},\"required\":[\"base\",\"exponent\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "base": { "type": "number" },
+            "exponent": { "type": "number" }
+        },
+        "required": ["base", "exponent"]
+    })"},
+
     {"sqrt", "Square root of a number", 
-     "{\"type\":\"object\",\"properties\":{\"number\":{\"type\":\"number\",\"minimum\":0}},\"required\":[\"number\"]}"},
+     R"({
+        "type": "object",
+        "properties": {
+            "number": { "type": "number", "minimum": 0 }
+        },
+        "required": ["number"]
+    })"},
+
     {"factorial", "Factorial of n (0-20)", 
-     "{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":20}},\"required\":[\"n\"]}"}
+     R"({
+        "type": "object",
+        "properties": {
+            "n": { "type": "integer", "minimum": 0, "maximum": 20 }
+        },
+        "required": ["n"]
+    })"},
 };
 
 const char* GetNameImpl() { return "calculator-tools"; }
@@ -190,7 +250,7 @@ char* HandleRequestImpl(const char* req) {
             std::string expr = args["expression"].get<std::string>();
             result = ExpressionParser::evaluate(expr);
             std::ostringstream oss;
-            oss.precision(15);
+            oss.precision(15);  // 设置精度为15位
             oss << result;
             resultText = expr + " = " + oss.str();
         }
