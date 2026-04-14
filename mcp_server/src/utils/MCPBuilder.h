@@ -42,6 +42,12 @@ public:
         InternalError = -32603
     };
 
+    // 构建响应消息，先搭建一个空壳，后面再往里填内容
+    // {
+    //     "jsonrpc": "2.0",
+    //     "id": request["id"],
+    //     "result": {}
+    // }
     static json Response(json request) {
         json response;
         response["jsonrpc"] = "2.0";

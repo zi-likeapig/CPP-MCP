@@ -58,16 +58,18 @@ namespace vx::mcp {
     struct PluginEntry {
         // 插件原始路径（用于对比目录变化）
         std::string path;
+
         // 实际加载的 staging 副本路径（dlopen 使用此路径，确保每次加载独立模块）
         std::string stagingPath;
-        LibraryHandle handle = nullptr;
-        PluginAPI* instance = nullptr;
+        LibraryHandle handle = nullptr; // 动态库句柄，是一个引用，可以理解为插件的身份证，可以用来查导出符号、加载和卸载动态库
+        PluginAPI* instance = nullptr;  // 插件实例接口表
 
         std::filesystem::file_time_type lastModified;
         std::uintmax_t fileSize = 0;
 
-        PluginAPI* (*createFunc)() = nullptr;
-        void (*destroyFunc)(PluginAPI*) = nullptr;
+        PluginAPI* (*createFunc)() = nullptr;  // 保存插件动态库里的CreatePlugin函数指针    
+        void (*destroyFunc)(PluginAPI*) = nullptr;  // 保存插件动态库里的DestroyPlugin函数指针
+        // 这两个函数相当原始instance的生命周期入口，约等于构造和析构函数，但这里只是保存了函数指针，并没有调用她们
 
         PluginEntry() = default;
         PluginEntry(const PluginEntry&) = delete;
@@ -108,7 +110,8 @@ namespace vx::mcp {
         ~PluginsLoader();
 
         bool LoadPlugins(const std::string& directory);
-        void UnloadPlugins();
+
+        void UnloadPlugins();   // 统一卸载所有插件
 
         std::vector<std::shared_ptr<PluginEntry>> GetPluginsSnapshot() const;
 

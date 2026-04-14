@@ -45,6 +45,7 @@ std::shared_ptr<vx::mcp::PluginsLoader> loader;
 // 对于 HTTP/SSE 传输，Connect 循环会在下次迭代检测到 isStopping_ 后退出。
 volatile sig_atomic_t g_stopRequested = 0;
 
+// 互斥锁，保护server发送notification的临界区代码
 struct NotificationState {
     std::mutex serverNotificationMutex;
 };
@@ -59,6 +60,7 @@ void stop_handler(sig_atomic_t s) {
 
 /// Notification Implementation from plugins to mcp-client
 void ClientNotificationCallbackImpl(const char* pluginName, const char* notification) {
+    // 防止多个plugin同时发送notification给server
     std::lock_guard<std::mutex> lock(notificationState.serverNotificationMutex);
     if (server && server->IsValid()) {
         server->SendNotification(pluginName, notification);
@@ -78,12 +80,14 @@ int main(int argc, char **argv) {
 
     //============================================================================================
     // setup signal handler (Ctrl+C)
+    // 如果检测到SIGINT信号（Ctrl+C），则调用stop_handler函数
     //============================================================================================
     signal(SIGINT, stop_handler);
 
     //============================================================================================
     // setup command line options
     //============================================================================================
+    // 创建一个命令行解析器op，后面所有选项都通过这个解析器进行注册和解析
     OptionParser op("Allowed options");
     auto help_option = op.add<Switch>("", "help", "produce help message");
     auto name_option = op.add<Value<std::string>>("n", "name", "the name of the server", "mcp-server");
@@ -119,21 +123,23 @@ int main(int argc, char **argv) {
     //============================================================================================
     if (use_sse_server->count() > 0) {
         transport = std::make_shared<vx::transport::SSE>();
-    } else if (use_httpstream_server->count() > 0) {
+    } 
+    else if (use_httpstream_server->count() > 0) {
         transport = std::make_shared<vx::transport::HttpStream>();
-    } else {
+    } 
+    else {
         transport = std::make_shared<vx::transport::Stdio>();
     }
 
     //============================================================================================
     // setup logger
     //============================================================================================
-    // Get the current time as ISO 8601 string
-    auto now = std::chrono::system_clock::now();
-    auto time_t_now = std::chrono::system_clock::to_time_t(now);
-    std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time_t_now), "%Y-%m-%dT%H-%M-%S");
-    std::string iso_date = ss.str();
+    // 获取当前时间，并将其转换为ISO 8601字符串，并拼接成日志文件名
+    auto now = std::chrono::system_clock::now();    // 获取当前时间
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);    // 将当前时间转换为时间戳
+    std::stringstream ss;    // 创建一个字符串流，像输出到cout一样把格式化后的时间写进一个字符串里
+    ss << std::put_time(std::gmtime(&time_t_now), "%Y-%m-%dT%H-%M-%S");    // 将时间戳转换为ISO 8601字符串
+    std::string iso_date = ss.str();    // 将字符串流里的内容（ISO 8601字符串）拿出来，转换为字符串
 
     // Concatenate ISO date to logname
     std::string logFilename = logs_directory + "/mcp-server_" + iso_date + ".log";
@@ -191,8 +197,9 @@ int main(int argc, char **argv) {
     //============================================================================================
     server->Name(name);
     server->VerboseLevel(verbose ? 1 : 0);
+
     server->OverrideCallback("tools/list", [](const json& request) {
-        nlohmann::ordered_json response = MCPBuilder::Response(request);
+        nlohmann::ordered_json response = MCPBuilder::Response(request);    // 构建一个响应消息空壳
         response["result"]["tools"] = json::array();
 
         // 获取快照后立即释放锁，遍历期间不阻塞热加载
@@ -241,6 +248,13 @@ int main(int argc, char **argv) {
             }
         }
 
+        // 如果在上面没有return response，就说明未找到匹配的工具，返回错误
+        response["result"]["isError"] = true;
+        response["result"]["content"] = json::array();
+        response["result"]["content"].push_back({
+            {"type", "text"},
+            {"text", "Tool not found: " + request["params"]["name"].get<std::string>()}
+        });
         return response;
     });
     server->OverrideCallback("prompts/list", [](const json& request) {
@@ -276,10 +290,17 @@ int main(int argc, char **argv) {
                         if (res_ptr) {
                             try {
                                 response["result"] = json::parse(res_ptr);
+                                delete[] res_ptr;
+                                return response;
                             } catch (const json::parse_error& e) {
                                 LOG(ERROR) << "Plugin " << pluginPrompt->name << " returned malformed data." << std::endl;
+                                delete[] res_ptr;
+                                return MCPBuilder::Error(MCPBuilder::InternalError, request["id"].dump(), "Prompt plugin returned malformed data.");
                             }
-                            delete[] res_ptr;
+                        } 
+                        else {
+                            LOG(ERROR) << "Plugin " << pluginPrompt->name << " returned nullptr." << std::endl;
+                            return MCPBuilder::Error(MCPBuilder::InternalError, request["id"].dump(), "Prompt plugin returned no data.");
                         }
                         return response;
                     }
@@ -287,7 +308,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        return response;
+        return MCPBuilder::Error(MCPBuilder::InvalidParams, request["id"].dump(), "Prompt not found: " + request["params"]["name"].get<std::string>());
     });
     server->OverrideCallback("resources/list", [](const json& request) {
         nlohmann::ordered_json response = MCPBuilder::Response(request);
@@ -323,17 +344,24 @@ int main(int argc, char **argv) {
                         if (res_ptr) {
                             try {
                                 response["result"] = json::parse(res_ptr);
+                                delete[] res_ptr;
+                                return response;
                             } catch (const json::parse_error& e) {
                                 LOG(ERROR) << "Plugin " << pluginResource->name << " returned malformed data." << std::endl;
+                                delete[] res_ptr;
+                                return MCPBuilder::Error(MCPBuilder::InternalError, request["id"].dump(), "Resource plugin returned malformed data.");
                             }
-                            delete[] res_ptr;
+                        } 
+                        else {
+                            LOG(ERROR) << "Plugin " << pluginResource->name << " returned nullptr." << std::endl;
+                            return MCPBuilder::Error(MCPBuilder::InternalError, request["id"].dump(), "Resource plugin returned no data.");
                         }
                     }
                 }
             }
         }
 
-        return response;
+        return MCPBuilder::Error(MCPBuilder::InvalidParams, request["id"].dump(), "Resource not found: " + request["params"]["uri"].get<std::string>());
     });
 
     server->Connect(transport);

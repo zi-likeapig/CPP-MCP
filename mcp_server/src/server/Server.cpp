@@ -65,13 +65,18 @@ namespace vx::mcp {
     void Server::WriterLoop() {
         LOG(INFO) << "Writer thread started." << std::endl;
         while (writer_running_.load()) {
-            std::string notification_to_send;
-            {
+            std::string notification_to_send; 
+            {   
+                // 只想在操作队列的时候加锁，所以用{}缩小锁的范围，离开作用域自动解锁
+                // unique_lock比lock_guard更灵活，可以手动解锁
+                // 所以与条件变量配合的时候必须使用unique_lock，因为wait操作内部会自动解锁
                 std::unique_lock<std::mutex> lock(output_mutex_);
-                // Wait until queue is not empty OR the writer should stop
+
+                // 使用条件变量，等待队列不为空或者WriterLoop停止时唤醒
+                // 不满足时内部会自动解锁，并等待条件变量满足时被唤醒再次加锁
                 queue_cv_.wait(lock, [this] { return !notification_queue_.empty() || !writer_running_.load(); });
 
-                // Check running flag again after waking up
+                // 醒来后再检查一遍运行标志和队列是否为空，如果都为空则退出循环
                 if (!writer_running_.load() && notification_queue_.empty()) {
                     break; // Exit loop if stopped and queue is empty
                 }
@@ -114,8 +119,9 @@ namespace vx::mcp {
         isStopping_ = false;
         isSyncCleaned_ = false;
 
-        // Start the writer thread
+        // 启动后台写线程，该程序用于主动发送notification给MCP Client
         writer_running_ = true;
+        // 创建一个线程执行WriterLoop函数，用于将通知发送给MCP Client，因为是成员函数所以需要指定属于当前对象
         writer_thread_ = std::thread(&Server::WriterLoop, this);
 
         // Start transport (required for SSE; should be a no-op/true for stdio)
@@ -125,6 +131,7 @@ namespace vx::mcp {
         }
 
         while (!isStopping_) {
+            // 因为是同步模型，所以不用另起一个read_thread，直接在主线程中读取就好
             auto [length, json_string] = transport->Read();
             if (isStopping_) break;
 
@@ -135,21 +142,29 @@ namespace vx::mcp {
             }
 
             try {
-                if (json_string.empty()) continue;
+                if (json_string.empty()) continue;  // 修改read后应该可以去掉了，但保留以防万一
                 LOG(DEBUG) << "Received: " << json_string << std::endl;
                 json request = json::parse(json_string);
                 parserErrors_ = 0; // reset parser error
-                json response = HandleRequest(request);
+                json response = HandleRequest(request); // 执行处理函数、返回结果
                 if (response != nullptr) {
+                    // lock_guard是C++11引入的RAII机制，用于管理互斥锁的锁定和解锁
+                    // 构造lock对象的时候会自动将output_mutex_加锁
+                    // 在lock对象生命周期结束时会自动解锁
+                    // 这里用lock_guard来保护output_mutex_，确保在写入响应时不会被其他线程干扰
                     std::lock_guard<std::mutex> lock(output_mutex_);
                     LOG(DEBUG) << "Sending Response: " << response.dump() << std::endl;
+                    // 这里是普通同步模型，所以直接调用transport_->Write把请求的
                     transport_->Write(response.dump());
+                    // 在这里解锁
                 }
             } catch (json::parse_error &e) {
+                // 如果prase失败了，不是合法的json字符串
                 // ok... what should we do in this case ? exit process ? does nothing ?
                 // for now, we manage a max parser consecutive errors
+                // 记录出错次数，这里设置了一个最大解析错误次数，如果超过这个次数，则停止服务器
                 LOG(ERROR) << "Error parsing JSON: " << e.what() << std::endl;
-                if (++parserErrors_ > MAX_PARSER_ERRORS) return false;
+                if (++parserErrors_ > MAX_PARSER_ERRORS) return false;  // **这里为什么不设置isStopping_为true？
             }
         }
 
@@ -158,6 +173,7 @@ namespace vx::mcp {
         return true;
     }
 
+    // **有点奇怪，先不要用这个异步
     bool Server::ConnectAsync(const std::shared_ptr<ITransport> &transport) {
         if (!transport) {
             LOG(ERROR) << "ConnectAsync called with null transport." << std::endl;
@@ -173,17 +189,23 @@ namespace vx::mcp {
         writer_thread_ = std::thread(&Server::WriterLoop, this);
 
         // Start the async reader thread
+        // 多创建一个线程用于异步读取MCP Client的请求
         reader_running_ = true;
         reader_thread_ = std::thread([this]() {
             LOG(INFO) << "Async Reader thread started." << std::endl;
             while (reader_running_ && !isStopping_) {
                 try {
+                    // 这里调用reader_thread_异步读取请求
+                    // 先返回一个future对象，这个对象代表一个异步操作的结果
                     auto future = transport_->ReadAsync();
+                    // 然后再调用future.get()获取异步操作的结果
                     auto [length, json_string] = future.get();
 
+                    // 这里有点奇怪，为什么这里不stop了，但在reader_thread_里自己join自己也不太好，不知道要怎么修改一下
                     if (isStopping_ || (length == 0 && json_string.empty())) {
                         LOG(INFO) << "Empty message or stopping. Reader exiting.";
                         break;
+                        // 这里break后读线程就结束了
                     }
 
                     if (!json_string.empty()) {
@@ -200,15 +222,18 @@ namespace vx::mcp {
                     }
                 } catch (json::parse_error &e) {
                     LOG(ERROR) << "Error parsing JSON: " << e.what() << std::endl;
+                    // 如果解析错误次数超过最大解析错误次数，则停止服务器
                     if (++parserErrors_ > MAX_PARSER_ERRORS) {
                         isStopping_ = true;
                         break;
                     }
                 } catch (const std::exception &e) {
+                    // 如果读取线程抛出了异常，则停止服务器
                     LOG(ERROR) << "Reader thread exception: " << e.what() << std::endl;
                     isStopping_ = true;
                     break;
                 }
+                // 这里sleep一下，防止读取线程过于频繁地尝试读取，循环出错，导致CPU占用过高
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
             LOG(INFO) << "Async Reader thread exiting." << std::endl;
@@ -222,23 +247,28 @@ namespace vx::mcp {
 
         isStopping_ = true; // 同时确保循环退出
 
-        // Stop transport (SSE shuts server down; stdio can no-op)
+        // Stop transport (SSE shuts server down; stdio can no-op 无操作)
         if (transport_) {
             LOG(INFO) << "Stopping transport..." << std::endl;
             transport_->Stop();
-            transport_.reset();
+            transport_.reset(); // 释放transport_智能指针
             LOG(INFO) << "Transport stopped." << std::endl;
          }
 
         LOG(INFO) << "Stopping server..." << std::endl;
 
         // Signal and join writer thread
+        // 设置writer_running_为false，唤醒并告诉等待条件变量的writer_thread_退出循环
         writer_running_ = false;
         queue_cv_.notify_one(); // Wake up the writer thread if waiting
-        if (writer_thread_.joinable()) {
+        if (writer_thread_.joinable()) {    // 先看看writer_thread_是否代表一个还没被回收的线程（是否还关联着一个没join()的真是线程）
+            // 优雅地等待writer_thread_退出
+            // join()会阻塞当前线程，直到writer_thread_退出
+            // 退出后会自动回收writer_thread_关联的线程资源
             writer_thread_.join();
             LOG(INFO) << "Writer thread joined." << std::endl;
         }
+
         LOG(INFO) << "Server stopped." << std::endl;
     }
 
@@ -246,8 +276,11 @@ namespace vx::mcp {
         isStopping_.store(true);
     }
 
+
     void Server::SendNotification(const std::string& pluginName, const char* notification) {
         if (isStopping_.load()) {
+            // 这里并不是代表这个server只负责这个plugin
+            // 而是代表这个server正在停止，所以这个plugin不能发送通知
             LOG(WARNING) << pluginName << " attempted to send notification while server stopping." << std::endl;
             return;
         }
@@ -260,11 +293,12 @@ namespace vx::mcp {
         queue_cv_.notify_one(); // Notify the writer thread
     }
 
+    // 处理MCP Client的请求，校验请求、读取method、到路由表里找对应处理函数，执行处理函数、返回结果
     json Server::HandleRequest(const json &request) {
         // log the request
         if (verboseLevel_ == 1) {
             LOG(DEBUG) << "=== Request START ===" << std::endl;
-            LOG(DEBUG) << request.dump(4) << std::endl;
+            LOG(DEBUG) << request.dump(4) << std::endl; // 4缩进格式化输出请求，方便调试
             LOG(DEBUG) << "=== Request END ===" << std::endl;
         }
 
@@ -276,6 +310,7 @@ namespace vx::mcp {
         // handle command
         std::string methodName = request["method"];
         auto it = functionMap.find(methodName);
+        // 如果找到了对应处理函数，则执行处理函数、返回结果
         if (it != functionMap.end()) {
             json response = it->second(request);
             if (response != nullptr) {
@@ -288,25 +323,31 @@ namespace vx::mcp {
             return response;
         }
 
-        // handle method not found case
+        // 如果没找到对应处理函数，则返回错误
         int id = request["id"];
         return MCPBuilder::Error(MCPBuilder::MethodNotFound, std::to_string(id), "Method not found");
     }
 
     bool Server::OverrideCallback(const std::string &method, std::function<json(const json &)> function) {
+        // 只要这个method在路由表里存在，则替换掉
         if (functionMap.find(method) != functionMap.end()) {
+            // 使用std::move将function移动到functionMap中，避免不必要的拷贝
+            // 移动后原function对象不再有效，后续不再保留原值
             functionMap[method] = std::move(function);
             return true;
         }
+        // 如果没找到对应处理函数，则返回false
         return false;
     }
 
+    // 初始化命令，用于初始化客户端和服务器之间的连接
+    // 主要还是打印初始化请求的信息，然后返回一个初始化响应
     json Server::InitializeCmd(const json &request) {
         LOG(INFO) << "InitializeCommand" << std::endl;
         if (request.contains("params")) {
             json params = request["params"];
 
-            // Access rootUri
+            // Access rootUri 工作区根目录URI
             if (params.contains("rootUri")) {
                 std::string rootUri = params["rootUri"].get<std::string>();
                 LOG(INFO) << "rootUri: " << rootUri << std::endl;
@@ -325,17 +366,17 @@ namespace vx::mcp {
                 LOG(INFO) << "initializationOptions: " << initializationOptions.dump() << std::endl;
             }
 
-            // Access capabilities
+            // Access capabilities 客户端能力声明
             if (params.contains("capabilities")) {
                 json capabilities = params["capabilities"];
 
-                // Access workspace capabilities
+                // Access workspace capabilities 客户端是否支持工作区文件夹能力
                 if (capabilities.contains("workspace") && capabilities["workspace"].contains("workspaceFolders")) {
                     bool workspaceFolders = capabilities["workspace"]["workspaceFolders"].get<bool>();
                     LOG(INFO) << "workspaceFolders: " << workspaceFolders << std::endl;
                 }
 
-                // Access textDocument capabilities
+                // Access textDocument capabilities 客户端是否支持文本文档同步能力，即变更后要怎么通知同步
                 if (capabilities.contains("textDocument") && capabilities["textDocument"].contains("synchronization")) {
                     json synchronization = capabilities["textDocument"]["synchronization"];
                     if (synchronization.contains("didChange") && synchronization["didChange"].contains("synchronizationKind")){
@@ -344,7 +385,7 @@ namespace vx::mcp {
                     }
                 }
 
-                // Access completion capabilities
+                // Access completion capabilities 客户端是否支持补全能力
                 if (capabilities.contains("textDocument") && capabilities["textDocument"].contains("completion") && capabilities["textDocument"]["completion"].contains("completionItem")) {
                     json completionItem = capabilities["textDocument"]["completion"]["completionItem"];
                     if (completionItem.contains("snippetSupport")){
@@ -370,7 +411,9 @@ namespace vx::mcp {
                 }
             }
         }
+
         nlohmann::ordered_json response = {};
+
         response["jsonrpc"] = "2.0";
         response["id"] = request["id"];
         response["result"]["protocolVersion"] = request["params"]["protocolVersion"];
@@ -408,7 +451,8 @@ namespace vx::mcp {
         nlohmann::ordered_json response;
         response["jsonrpc"] = "2.0";
         response["id"] = request["id"];
-        response["result"]["tools"] = json::array();
+        response["result"]["tools"] = json::array();    // 工具列表，这里返回空数组
+        // 会在main.cpp中OverrideCallback这个函数里填充工具列表
         return response;
     }
 
@@ -499,12 +543,14 @@ namespace vx::mcp {
         return nullptr;
     }
 
+    // **这个异步关闭也有点奇怪，最好别用
     void Server::StopAsync() {
         if (isAsyncCleaned_.exchange(true)) return;
 
         isStopping_ = true;
-
         LOG(INFO) << "Stopping async server..." << std::endl;
+
+        // 为什么这里不判断transport了？
 
         // Stop writer thread
         writer_running_ = false;

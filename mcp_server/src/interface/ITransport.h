@@ -30,15 +30,18 @@
 
 namespace vx {
 
+    // 全都是需要子类重写的纯虚函数（STDIO和SSE）
     class ITransport {
     public:
         virtual bool Start() = 0;
         virtual void Stop() = 0;
         virtual bool IsRunning() = 0;
 
+        // 同步
         virtual std::pair<size_t, std::string> Read() = 0;
         virtual void Write(const std::string& json_data) = 0;
 
+        // 异步
         virtual std::future<std::pair<size_t, std::string>> ReadAsync() = 0;
         virtual std::future<void> WriteAsync(const std::string& json_data) = 0;
 

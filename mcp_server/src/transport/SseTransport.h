@@ -75,29 +75,42 @@ namespace vx::transport {
         bool IsRunning() override { return server_running_.load(); }
 
     private:
+        // 设置HTTP路由
         void SetupRoutes();
+        // 处理客户端建立SSE长连接请求
         void HandleSSEConnection(const httplib::Request& req, httplib::Response& res);
+        // 处理客户端发来的普通POST请求
         void HandlePostMessage(const httplib::Request& req, httplib::Response& res);
 
         static void HandleOptionsRequest(const httplib::Request& req, httplib::Response& res);
         static void SetCORSHeaders(httplib::Response& res);
 
+        // 内部维护了一个HTTP服务器，用于处理SSE长连接请求
         std::string host_;
         int port_;
+
+        // SSE方式需要一个HTTP服务器
         std::unique_ptr<httplib::Server> server_;
+        // 后台HTTP服务器线程
         std::thread server_thread_;
+        // HTTP服务器是否正在运行
         std::atomic<bool> server_running_ {false};
+        // 客户端是否已建立SSE长连接
         std::atomic<bool> client_connected_ {false};
 
         // Message queues for bidirectional connections
+        // 消息队列，用于存储客户端发来的消息和Server需要发送给客户端的消息
         std::queue<std::string> incoming_messages_;
         std::queue<std::string> outgoing_messages_;
+        // 消息队列互斥锁
         std::mutex incoming_mutex_;
         std::mutex outgoing_mutex_;
+        // 消息队列条件变量
         std::condition_variable incoming_cv_;
         std::condition_variable outgoing_cv_;
 
         // SSE connection management
+        // SSE连接是否活跃
         std::atomic<bool> sse_active_ {false};
     };
 
